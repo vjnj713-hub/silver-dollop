@@ -1,0 +1,81 @@
+name: BlazePC RDP (Playit Version)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # Every 6 hours
+
+jobs:
+  blaze-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      RDP_USER: BlazePC
+
+    steps:
+      - name: Enable Remote Desktop
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          Write-Host "RDP Enabled ✅"
+
+      - name: Create BlazePC User
+        run: |
+          $user = "$env:RDP_USER"
+          $pwdPlain = "${{ secrets.RDP_PASSWORD }}"
+          if (-not $pwdPlain -or $pwdPlain -eq "") { exit 1 }
+          $secure = ConvertTo-SecureString $pwdPlain -AsPlainText -Force
+
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+              Write-Host "User already exists, updating password..."
+              $u = [ADSI]"WinNT://./$user,user"
+              $u.SetPassword($pwdPlain)
+          } else {
+              New-LocalUser -Name $user -Password $secure -AccountNeverExpires -PasswordNeverExpires
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member $user -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction SilentlyContinue
+          Write-Host "BlazePC user created ✅"
+
+      - name: Download Playit.gg Tunnel
+        run: |
+          $url = "https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-win_64-setup.exe"
+          $path = "$env:TEMP\playit.exe"
+          Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing
+          Write-Host "Playit agent downloaded ✅"
+          echo "PLAYIT_PATH=$path" >> $env:GITHUB_ENV
+
+      - name: Configure Playit.gg Tunnel
+        run: |
+          $path = "$env:PLAYIT_PATH"
+          Write-Host "Starting Playit agent..."
+          Start-Process -FilePath $path -ArgumentList "--no-console" -PassThru | Out-Null
+          Start-Sleep -Seconds 10
+          Write-Host "Playit.gg Agent started ✅"
+          Write-Host "Go to https://playit.gg/account/tunnels to get your public IP & port 🔗"
+
+      - name: System Info
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+          Write-Host "=== SYSTEM INFO ==="
+          Write-Host "OS: $($os.Caption)"
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "RAM: ${ram}GB"
+          Write-Host "==================="
+
+      - name: Keep Session Alive
+        run: |
+          Write-Host "`n=== BlazePC RDP ACTIVE ==="
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: ${{ secrets.RDP_PASSWORD }}"
+          Write-Host "Find your Playit.gg public RDP IP & port in dashboard."
+          Write-Host "============================"
+          while ($true) {
+              Write-Host "[$(Get-Date)] BlazePC RDP running..."
+              Start-Sleep -Seconds 300
+          }
